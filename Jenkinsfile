@@ -1,50 +1,55 @@
 pipeline {
     agent any
-
     environment {
-        registry = "211223789150.dkr.ecr.us-east-1.amazonaws.com/my-docker-repo"
+        registry = "305292172736.dkr.ecr.us-east-1.amazonaws.com/my-docker-repo"
+        SONAR_URL = "http://18.204.7.11:9000"
+    }
+    tools {
+        maven 'Maven3'
     }
     stages {
-        stage('Checkout') {
+        stage('Cloning Git') {
             steps {
-                checkout scmGit(branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/akannan1087/docker-spring-boot']])
+                checkout([$class: 'GitSCM', branches: [[name: '*/master']], userRemoteConfigs: [[url: 'https://github.com/Krishdutta11/docker-spring-boot.git']]])
             }
         }
-        
-        stage ("Build JAR") {
+        stage('Build') {
             steps {
-                sh "mvn clean install"
+                sh 'mvn clean install'
             }
         }
-        
-        stage ("Build Image") {
+        stage('Static Code Analysis') {
+            steps {
+                echo "Running static code analysis..."
+                withCredentials([string(credentialsId: 'sonarqube', variable: 'SONAR_AUTH_TOKEN')]) {
+                    sh "mvn sonar:sonar -Dsonar.login=$SONAR_AUTH_TOKEN -Dsonar.host.url=${env.SONAR_URL}"
+                }
+            }
+        }
+        // Building Docker images
+        stage('Building image') {
             steps {
                 script {
-                    docker.build registry
+                    dockerImage = docker.build registry 
+                    dockerImage.tag("$BUILD_NUMBER")
                 }
             }
         }
-        
-        stage ("Push to ECR") {
+        // Uploading Docker images into AWS ECR
+        stage('Pushing to ECR') {
+            steps {  
+                script {
+                    sh 'aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 305292172736.dkr.ecr.us-east-1.amazonaws.com/my-docker-repo'
+                    sh 'docker push 305292172736.dkr.ecr.us-east-1.amazonaws.com/my-docker-repo:$BUILD_NUMBER'
+                }
+            }
+        }
+        stage('Helm Deploy') {
             steps {
                 script {
-                    sh "aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 211223789150.dkr.ecr.us-east-1.amazonaws.com"
-                    sh "docker push 211223789150.dkr.ecr.us-east-1.amazonaws.com/my-docker-repo:latest"
-                    
+                    sh "helm upgrade first --install mychart --namespace helm-deployment --set image.tag=$BUILD_NUMBER"
                 }
             }
         }
-        
-        stage ("Helm package") {
-            steps {
-                    sh "helm package springboot"
-                }
-            }
-                
-        stage ("Helm install") {
-            steps {
-                    sh "helm upgrade myrelease-21 springboot-0.1.0.tgz"
-                }
-            }
     }
 }
